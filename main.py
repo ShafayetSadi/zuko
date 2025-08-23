@@ -1,13 +1,9 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
+from zuko.models import CodeRequest
 from zuko.core.executor import run_code
 
 app = FastAPI(title="Zuko - A Scalable Code Execution Engine")
 
-class CodeRequest(BaseModel):
-    language: str
-    code: str
-    input_data: str = ""
 
 @app.post("/execute")
 def execute_code(req: CodeRequest):
