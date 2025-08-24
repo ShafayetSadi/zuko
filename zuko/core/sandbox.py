@@ -1,12 +1,14 @@
+import re
 import docker
-import time
+from typing import Tuple
 from zuko.models import ExecutionResult
+
 
 client = docker.from_env()
 
 
 class DockerExecutor:
-    def __init__(self, image="python:3.12-slim", timeout=3):
+    def __init__(self, image="zuko-python:3.12", timeout=3):
         self.image = image
         self.timeout = timeout
 
@@ -16,13 +18,13 @@ class DockerExecutor:
             f"/app/{input_path.split('/')[-1]}" if input_path else "/dev/null"
         )
 
-        cmd = f"sh -c 'python -u {container_path} < {input_container_path}'"
+        python_cmd = f"python -u {container_path} < {input_container_path}"
+        cmd = f'/usr/bin/time -f "ZUKO_TIME:%U:%S ZUKO_MEMORY:%M" {python_cmd}'
 
         try:
-            start = time.time()
             container = client.containers.run(
                 self.image,
-                cmd,
+                ["sh", "-c", cmd],
                 volumes={"/tmp": {"bind": "/app", "mode": "rw"}},
                 working_dir="/app",
                 mem_limit="128m",
@@ -37,10 +39,8 @@ class DockerExecutor:
                 stderr=True,
             )
 
-            stats_stream = container.stats(stream=True, decode=True)
             try:
                 result = container.wait(timeout=self.timeout)
-                stats = next(stats_stream)
             except Exception:
                 container.kill()
                 logs = container.logs().decode(errors="replace")
@@ -50,35 +50,19 @@ class DockerExecutor:
                     stdout=logs,
                     stderr="",
                     exit_code=-1,
-                    time_used=time.time() - start,
+                    time_used=0,
                     memory_used=0,
                 )
-            finally:
-                stats_stream.close()
 
             exit_code = result.get("StatusCode", -1)
-
-            if stats and stats.get("memory_stats"):
-                memory_used_bytes = stats["memory_stats"].get("max_usage", 0)
-                if memory_used_bytes == 0:
-                    memory_used_bytes = stats["memory_stats"].get("usage", 0)
-                memory_used_kb = memory_used_bytes // 1024  # convert to KB
-            else:
-                memory_used_kb = 0
-
-            if stats and stats.get("cpu_stats", {}).get("cpu_usage"):
-                cpu_total = stats["cpu_stats"]["cpu_usage"]["total_usage"]
-                cpu_time_ms = cpu_total / 1e6  # convert to ms
-            else:
-                cpu_time_ms = 0
-
-            logs = container.logs().decode(errors="replace")
+            logs = container.logs(stdout=True, stderr=True).decode(errors="replace")
+            cpu_time_ms, memory_used_kb, clean_logs = self._parse_time_output(logs)
             container.remove()
 
             if exit_code == 0:
                 return ExecutionResult(
                     status="OK",
-                    stdout=logs,
+                    stdout=clean_logs,
                     stderr="",
                     exit_code=exit_code,
                     time_used=cpu_time_ms,
@@ -87,7 +71,7 @@ class DockerExecutor:
             else:
                 return ExecutionResult(
                     status="RUNTIME_ERROR",
-                    stdout=logs,
+                    stdout=clean_logs,
                     stderr="",
                     exit_code=exit_code,
                     time_used=cpu_time_ms,
@@ -112,3 +96,27 @@ class DockerExecutor:
                 time_used=0,
                 memory_used=0,
             )
+
+    def _parse_time_output(self, logs: str) -> Tuple[float, int, str]:
+        """
+        Parse /usr/bin/time output and clean logs
+        Returns: (cpu_time_ms, memory_kb, clean_logs)
+        """
+
+        # Look for ZUKO_TIME:user:system ZUKO_MEMORY:memory pattern
+        time_pattern = r"ZUKO_TIME:(\d+\.?\d*):(\d+\.?\d*)\s+ZUKO_MEMORY:(\d+)"
+        match = re.search(time_pattern, logs)
+
+        if match:
+            user_time = float(match.group(1))  # seconds
+            system_time = float(match.group(2))  # seconds
+            memory_kb = int(match.group(3))  # KB
+
+            total_cpu_time = user_time + system_time
+            cpu_time_ms = total_cpu_time * 1000 
+
+            clean_logs = re.sub(time_pattern, "", logs).strip()
+
+            return cpu_time_ms, memory_kb, clean_logs
+        else:
+            return 0.0, 0, logs
