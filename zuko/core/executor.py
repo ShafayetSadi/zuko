@@ -10,9 +10,10 @@ def run_code(
         return ExecutionResult(
             status="ERROR",
             stdout="",
-            stderr=f"Unsupported language: {language}   ",
+            stderr=f"Unsupported language: {language}",
             exit_code=-1,
             time_used=0,
+            memory_used=0,
         )
 
     with FileManager(code, input_data) as fm:

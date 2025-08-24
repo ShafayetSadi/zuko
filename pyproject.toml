@@ -7,5 +7,17 @@ requires-python = ">=3.13"
 dependencies = [
     "docker>=7.1.0",
     "fastapi>=0.116.1",
+    "httpx>=0.28.1",
+    "pytest>=8.4.1",
     "uvicorn>=0.35.0",
+]
+
+
+[tool.ruff]
+exclude = ["migrations", ".venv", ".git", ".vscode", ".idea", "__pycache__", ".pytest_cache", ".mypy_cache", ".coverage"]
+line-length = 119
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.10",
 ]
